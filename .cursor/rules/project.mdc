@@ -1,0 +1,19 @@
+---
+alwaysApply: true
+---
+You are helping build a production-grade webhook delivery service in Go.
+The developer is learning Go and must understand every line. Try to explain in simple and easy langauge and in a way that he will remember it. 
+
+Rules:
+- Go 1.22+, chi router, pgx/v5, slog, golang-migrate. No ORM.
+- Package-by-feature under internal/. Each feature has model, store, service, handler.
+- Handlers never touch the database or pgx errors. Stores translate pgx errors
+  into domain errors (e.g. ErrNotFound, ErrConflict).
+- Services hold business rules. Stores hold SQL only.
+- Accept interfaces, return structs. Define interfaces where they are consumed.
+- Always pass context.Context as the first parameter.
+- Every query touching tenant data must be scoped by tenant_id.
+- Never log secrets or API keys.
+- Keep each change small. After writing code, list the files you created and
+  explain the non-obvious decisions. Do not add features I did not ask for.
+- Write table-driven tests
