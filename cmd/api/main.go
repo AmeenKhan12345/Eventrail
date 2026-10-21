@@ -27,6 +27,11 @@ func main() {
 
 	logger := newLogger(cfg.LogLevel)
 
+	if err := postgres.RunMigrations(cfg.DatabaseURL); err != nil {
+		logger.Error("run migrations", "err", err)
+		os.Exit(1)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
