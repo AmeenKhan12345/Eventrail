@@ -17,9 +17,11 @@ import (
 
 const maxBodyBytes = 1 << 20
 
+const apiKeyWarning = "This key will not be shown again."
+
 // service is what the handler needs. *Service satisfies it.
 type service interface {
-	Create(ctx context.Context, name string) (Tenant, error)
+	Create(ctx context.Context, name string) (Tenant, string, error)
 	Get(ctx context.Context, id uuid.UUID) (Tenant, error)
 	List(ctx context.Context, limit, offset int) ([]Tenant, error)
 }
@@ -58,6 +60,12 @@ type createRequest struct {
 	Name string `json:"name"`
 }
 
+type createResponse struct {
+	tenantResponse
+	APIKey  string `json:"api_key"`
+	Warning string `json:"warning"`
+}
+
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	var req createRequest
 	if err := decodeJSON(w, r, &req); err != nil {
@@ -65,12 +73,16 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	created, err := h.svc.Create(r.Context(), req.Name)
+	created, apiKey, err := h.svc.Create(r.Context(), req.Name)
 	if err != nil {
 		h.writeServiceError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusCreated, toResponse(created))
+	httpx.WriteJSON(w, http.StatusCreated, createResponse{
+		tenantResponse: toResponse(created),
+		APIKey:         apiKey,
+		Warning:        apiKeyWarning,
+	})
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {

@@ -20,10 +20,15 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-const createSQL = `
+const createTenantSQL = `
 INSERT INTO tenants (name)
 VALUES ($1)
 RETURNING id, name, created_at, updated_at
+`
+
+const createKeySQL = `
+INSERT INTO api_keys (tenant_id, key_prefix, key_hash)
+VALUES ($1, $2, $3)
 `
 
 const getByIDSQL = `
@@ -39,10 +44,25 @@ ORDER BY created_at DESC, id ASC
 LIMIT $1 OFFSET $2
 `
 
-// Create inserts a tenant and returns the row Postgres stored.
-func (s *Store) Create(ctx context.Context, name string) (Tenant, error) {
-	tenant, err := scanTenant(s.pool.QueryRow(ctx, createSQL, name))
+// CreateWithKey inserts a tenant and its API key in one transaction.
+// Any error rolls the transaction back, so a failed key insert leaves no tenant.
+func (s *Store) CreateWithKey(ctx context.Context, name, keyPrefix, keyHash string) (Tenant, error) {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return Tenant{}, wrapErr("create tenant", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	tenant, err := scanTenant(tx.QueryRow(ctx, createTenantSQL, name))
+	if err != nil {
+		return Tenant{}, wrapErr("create tenant", err)
+	}
+	if _, err := tx.Exec(ctx, createKeySQL, tenant.ID, keyPrefix, keyHash); err != nil {
+		return Tenant{}, wrapErr("create api key", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return Tenant{}, wrapErr("create tenant", err)
 	}
 	return tenant, nil

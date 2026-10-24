@@ -7,10 +7,14 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/AmeenKhan12345/webhooks/internal/auth"
 )
 
 type fakeStore struct {
 	createName   string
+	createPrefix string
+	createHash   string
 	createCalled bool
 	createErr    error
 
@@ -21,9 +25,11 @@ type fakeStore struct {
 	listErr    error
 }
 
-func (f *fakeStore) Create(_ context.Context, name string) (Tenant, error) {
+func (f *fakeStore) CreateWithKey(_ context.Context, name, keyPrefix, keyHash string) (Tenant, error) {
 	f.createCalled = true
 	f.createName = name
+	f.createPrefix = keyPrefix
+	f.createHash = keyHash
 	if f.createErr != nil {
 		return Tenant{}, f.createErr
 	}
@@ -61,7 +67,7 @@ func TestCreate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fake := &fakeStore{}
-			got, err := NewService(fake).Create(context.Background(), tt.input)
+			got, key, err := NewService(fake).Create(context.Background(), tt.input)
 
 			if tt.wantMsg != "" {
 				if !errors.Is(err, ErrInvalidInput) {
@@ -71,7 +77,10 @@ func TestCreate(t *testing.T) {
 					t.Fatalf("message = %q, want %q", err.Error(), tt.wantMsg)
 				}
 				if fake.createCalled {
-					t.Fatal("store.Create was called")
+					t.Fatal("store.CreateWithKey was called")
+				}
+				if key != "" {
+					t.Fatal("plaintext key returned for invalid input")
 				}
 				if got != (Tenant{}) {
 					t.Fatalf("got %+v, want zero Tenant", got)
@@ -87,6 +96,13 @@ func TestCreate(t *testing.T) {
 			}
 			if got.Name != tt.wantName {
 				t.Fatalf("name = %q, want %q", got.Name, tt.wantName)
+			}
+			prefix, err := auth.Parse(key)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if fake.createPrefix != prefix || fake.createHash != auth.Hash(key) {
+				t.Fatalf("stored prefix %q hash %q, key %q", fake.createPrefix, fake.createHash, key)
 			}
 		})
 	}
@@ -134,7 +150,7 @@ func TestStoreErrorsPassThrough(t *testing.T) {
 			name: "create",
 			fake: fakeStore{createErr: boom},
 			call: func(s *Service) error {
-				_, err := s.Create(context.Background(), "Acme")
+				_, _, err := s.Create(context.Background(), "Acme")
 				return err
 			},
 			want: boom,

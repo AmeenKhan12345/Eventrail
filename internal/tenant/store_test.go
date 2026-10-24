@@ -65,7 +65,7 @@ func TestCreateThenGet(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			created, err := testStore.Create(context.Background(), tt.name)
+			created, err := testStore.CreateWithKey(context.Background(), tt.name, "whk_live_"+tt.name, "hash-"+tt.name)
 			if err != nil {
 				t.Fatalf("Create: %v", err)
 			}
@@ -162,15 +162,15 @@ func seedOrdered(t *testing.T) []Tenant {
 	olderAt := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
 	newerAt := time.Date(2024, 6, 7, 8, 9, 10, 0, time.UTC)
 
-	left, err := testStore.Create(ctx, "older-a")
+	left, err := testStore.CreateWithKey(ctx, "older-a", "whk_live_11111111", "hash-a")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	right, err := testStore.Create(ctx, "older-b")
+	right, err := testStore.CreateWithKey(ctx, "older-b", "whk_live_22222222", "hash-b")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	newest, err := testStore.Create(ctx, "newer")
+	newest, err := testStore.CreateWithKey(ctx, "newer", "whk_live_33333333", "hash-c")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -211,6 +211,71 @@ func equalTenant(got, want Tenant) bool {
 		got.Name == want.Name &&
 		got.CreatedAt.Equal(want.CreatedAt) &&
 		got.UpdatedAt.Equal(want.UpdatedAt)
+}
+
+func TestCreateWithKeyWritesBothRows(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	created, err := testStore.CreateWithKey(ctx, "Acme", "whk_live_abc12345", "hash-acme")
+	if err != nil {
+		t.Fatalf("CreateWithKey: %v", err)
+	}
+
+	var prefix, hash string
+	var revoked bool
+	err = pool.QueryRow(ctx, `
+		SELECT key_prefix, key_hash, revoked_at IS NOT NULL
+		FROM api_keys
+		WHERE tenant_id = $1
+	`, created.ID).Scan(&prefix, &hash, &revoked)
+	if err != nil {
+		t.Fatalf("api key row: %v", err)
+	}
+	if prefix != "whk_live_abc12345" || hash != "hash-acme" || revoked {
+		t.Fatalf("prefix %q hash %q revoked %v", prefix, hash, revoked)
+	}
+}
+
+func TestCreateWithKeyRollsBack(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+	const prefix = "whk_live_deadbeef"
+
+	if _, err := testStore.CreateWithKey(ctx, "first", prefix, "hash-1"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := testStore.CreateWithKey(ctx, "second", prefix, "hash-2"); err == nil {
+		t.Fatal("expected prefix conflict")
+	}
+
+	var names []string
+	rows, err := pool.Query(ctx, `SELECT name FROM tenants`)
+	if err != nil {
+		t.Fatalf("tenants: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if len(names) != 1 || names[0] != "first" {
+		t.Fatalf("tenants = %v, want [first]", names)
+	}
+
+	var keys int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM api_keys WHERE key_prefix = $1`, prefix).Scan(&keys); err != nil {
+		t.Fatalf("count keys: %v", err)
+	}
+	if keys != 1 {
+		t.Fatalf("api keys = %d, want 1", keys)
+	}
 }
 
 func moduleRoot() (string, error) {

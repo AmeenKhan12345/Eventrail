@@ -24,14 +24,15 @@ type fakeService struct {
 	getErr    error
 	listErr   error
 	listed    []Tenant
+	one       Tenant
 }
 
-func (f *fakeService) Create(_ context.Context, name string) (Tenant, error) {
+func (f *fakeService) Create(_ context.Context, name string) (Tenant, string, error) {
 	if strings.TrimSpace(name) == "" {
-		return Tenant{}, InvalidInput("name is required")
+		return Tenant{}, "", InvalidInput("name is required")
 	}
 	if f.createErr != nil {
-		return Tenant{}, f.createErr
+		return Tenant{}, "", f.createErr
 	}
 	now := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
 	return Tenant{
@@ -39,14 +40,14 @@ func (f *fakeService) Create(_ context.Context, name string) (Tenant, error) {
 		Name:      name,
 		CreatedAt: now,
 		UpdatedAt: now,
-	}, nil
+	}, "whk_live_aabbccdd_" + strings.Repeat("ab", 24), nil
 }
 
 func (f *fakeService) Get(context.Context, uuid.UUID) (Tenant, error) {
 	if f.getErr != nil {
 		return Tenant{}, f.getErr
 	}
-	return Tenant{}, nil
+	return f.one, nil
 }
 
 func (f *fakeService) List(context.Context, int, int) ([]Tenant, error) {
@@ -177,15 +178,44 @@ func TestCreateOK(t *testing.T) {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
 	}
 
-	var got tenantResponse
+	var got struct {
+		tenantResponse
+		APIKey  string `json:"api_key"`
+		Warning string `json:"warning"`
+	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("json: %v", err)
 	}
 	if got.Name != "Acme" || got.ID == uuid.Nil {
 		t.Fatalf("got %+v", got)
 	}
+	if got.APIKey == "" || got.Warning != apiKeyWarning {
+		t.Fatalf("api_key %q warning %q", got.APIKey, got.Warning)
+	}
 	if !strings.Contains(rec.Body.String(), `"created_at"`) || !strings.Contains(rec.Body.String(), `"updated_at"`) {
 		t.Fatalf("body missing snake_case times: %s", rec.Body.String())
+	}
+}
+
+func TestGetAndListOmitAPIKey(t *testing.T) {
+	now := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	one := Tenant{
+		ID:        uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+		Name:      "Acme",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	svc := &fakeService{one: one, listed: []Tenant{one}}
+
+	getRec := request(t, svc, http.MethodGet, "/v1/tenants/"+one.ID.String(), "", "Bearer "+operatorKey)
+	listRec := request(t, svc, http.MethodGet, "/v1/tenants", "", "Bearer "+operatorKey)
+	for _, rec := range []*httptest.ResponseRecorder{getRec, listRec} {
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "api_key") || strings.Contains(rec.Body.String(), "whk_live_") {
+			t.Fatalf("response included a key: %s", rec.Body.String())
+		}
 	}
 }
 

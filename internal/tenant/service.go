@@ -6,6 +6,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+
+	"github.com/AmeenKhan12345/webhooks/internal/auth"
 )
 
 const (
@@ -16,7 +18,7 @@ const (
 
 // store is the data access the service needs. *Store satisfies it.
 type store interface {
-	Create(ctx context.Context, name string) (Tenant, error)
+	CreateWithKey(ctx context.Context, name, keyPrefix, keyHash string) (Tenant, error)
 	GetByID(ctx context.Context, id uuid.UUID) (Tenant, error)
 	List(ctx context.Context, limit, offset int) ([]Tenant, error)
 }
@@ -31,16 +33,27 @@ func NewService(s store) *Service {
 	return &Service{store: s}
 }
 
-// Create trims the name, rejects an empty or overlong name, then stores it.
-func (s *Service) Create(ctx context.Context, name string) (Tenant, error) {
+// Create trims the name, rejects an empty or overlong name, generates an API
+// key, and stores the tenant and the key hash together.
+// The plaintext key is returned once.
+func (s *Service) Create(ctx context.Context, name string) (Tenant, string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return Tenant{}, InvalidInput("name is required")
+		return Tenant{}, "", InvalidInput("name is required")
 	}
 	if utf8.RuneCountInString(name) > maxNameLen {
-		return Tenant{}, InvalidInput("name must be at most 100 characters")
+		return Tenant{}, "", InvalidInput("name must be at most 100 characters")
 	}
-	return s.store.Create(ctx, name)
+
+	plaintext, prefix, hash, err := auth.Generate()
+	if err != nil {
+		return Tenant{}, "", err
+	}
+	tenant, err := s.store.CreateWithKey(ctx, name, prefix, hash)
+	if err != nil {
+		return Tenant{}, "", err
+	}
+	return tenant, plaintext, nil
 }
 
 // Get returns the tenant with this id.
