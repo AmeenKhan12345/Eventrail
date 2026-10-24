@@ -11,18 +11,23 @@ func TestLoad(t *testing.T) {
 	}{
 		{
 			name:    "missing database url",
-			env:     map[string]string{"DATABASE_URL": "", "PORT": "", "LOG_LEVEL": ""},
+			env:     map[string]string{"DATABASE_URL": "", "OPERATOR_API_KEY": "operator-key", "PORT": "", "LOG_LEVEL": ""},
+			wantErr: true,
+		},
+		{
+			name:    "missing operator api key",
+			env:     map[string]string{"DATABASE_URL": "postgres://localhost/webhooks", "OPERATOR_API_KEY": "", "PORT": "", "LOG_LEVEL": ""},
 			wantErr: true,
 		},
 		{
 			name: "defaults",
-			env:  map[string]string{"DATABASE_URL": "postgres://localhost/webhooks", "PORT": "", "LOG_LEVEL": ""},
-			want: Config{Port: "8080", DatabaseURL: "postgres://localhost/webhooks", LogLevel: "info"},
+			env:  map[string]string{"DATABASE_URL": "postgres://localhost/webhooks", "OPERATOR_API_KEY": "operator-key", "PORT": "", "LOG_LEVEL": ""},
+			want: Config{Port: "8080", DatabaseURL: "postgres://localhost/webhooks", LogLevel: "info", OperatorAPIKey: "operator-key"},
 		},
 		{
 			name: "overrides",
-			env:  map[string]string{"DATABASE_URL": "postgres://db/app", "PORT": "9090", "LOG_LEVEL": "debug"},
-			want: Config{Port: "9090", DatabaseURL: "postgres://db/app", LogLevel: "debug"},
+			env:  map[string]string{"DATABASE_URL": "postgres://db/app", "OPERATOR_API_KEY": "other-key", "PORT": "9090", "LOG_LEVEL": "debug"},
+			want: Config{Port: "9090", DatabaseURL: "postgres://db/app", LogLevel: "debug", OperatorAPIKey: "other-key"},
 		},
 	}
 

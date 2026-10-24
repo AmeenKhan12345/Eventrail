@@ -13,9 +13,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/AmeenKhan12345/webhooks/internal/auth"
 	"github.com/AmeenKhan12345/webhooks/internal/config"
 	"github.com/AmeenKhan12345/webhooks/internal/httpx"
 	"github.com/AmeenKhan12345/webhooks/internal/platform/postgres"
+	"github.com/AmeenKhan12345/webhooks/internal/tenant"
 )
 
 func main() {
@@ -26,6 +28,7 @@ func main() {
 	}
 
 	logger := newLogger(cfg.LogLevel)
+	slog.SetDefault(logger)
 
 	if err := postgres.RunMigrations(cfg.DatabaseURL); err != nil {
 		logger.Error("run migrations", "err", err)
@@ -42,6 +45,8 @@ func main() {
 	}
 	defer pool.Close()
 
+	tenants := tenant.NewHandler(tenant.NewService(tenant.NewStore(pool)))
+
 	router := chi.NewRouter()
 	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := pool.Ping(r.Context()); err != nil {
@@ -50,6 +55,10 @@ func main() {
 			return
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	router.Group(func(r chi.Router) {
+		r.Use(auth.Operator(cfg.OperatorAPIKey))
+		r.Mount("/v1/tenants", tenants.Routes())
 	})
 
 	server := &http.Server{
