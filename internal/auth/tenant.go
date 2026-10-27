@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/AmeenKhan12345/webhooks/internal/httpx"
+	"github.com/AmeenKhan12345/Eventrail/internal/httpx"
 )
 
 // lookup is the API-key read the middleware needs. *Store satisfies it.

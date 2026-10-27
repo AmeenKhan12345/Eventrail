@@ -11,13 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
-	"github.com/AmeenKhan12345/webhooks/internal/auth"
-	"github.com/AmeenKhan12345/webhooks/internal/config"
-	"github.com/AmeenKhan12345/webhooks/internal/httpx"
-	"github.com/AmeenKhan12345/webhooks/internal/platform/postgres"
-	"github.com/AmeenKhan12345/webhooks/internal/tenant"
+	"github.com/AmeenKhan12345/Eventrail/internal/config"
+	"github.com/AmeenKhan12345/Eventrail/internal/httpapi"
+	"github.com/AmeenKhan12345/Eventrail/internal/platform/postgres"
+	"github.com/AmeenKhan12345/Eventrail/internal/secrets"
 )
 
 func main() {
@@ -45,20 +42,16 @@ func main() {
 	}
 	defer pool.Close()
 
-	tenants := tenant.NewHandler(tenant.NewService(tenant.NewStore(pool)))
-
-	router := chi.NewRouter()
-	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		if err := pool.Ping(r.Context()); err != nil {
-			logger.Error("healthz ping", "err", err)
-			httpx.WriteError(w, http.StatusServiceUnavailable, "unavailable", "database unreachable")
-			return
-		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
-	router.Group(func(r chi.Router) {
-		r.Use(auth.Operator(cfg.OperatorAPIKey))
-		r.Mount("/v1/tenants", tenants.Routes())
+	box, err := secrets.NewBox(cfg.SigningSecretKey)
+	if err != nil {
+		logger.Error("signing secret key", "err", err)
+		os.Exit(1)
+	}
+	router := httpapi.NewRouter(httpapi.Deps{
+		Pool:              pool,
+		OperatorAPIKey:    cfg.OperatorAPIKey,
+		Box:               box,
+		AllowInsecureURLs: cfg.AllowInsecureURLs,
 	})
 
 	server := &http.Server{

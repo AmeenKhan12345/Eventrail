@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/AmeenKhan12345/webhooks/internal/platform/postgres"
+	"github.com/AmeenKhan12345/Eventrail/internal/platform/postgres"
 )
 
 var (

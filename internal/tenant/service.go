@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/AmeenKhan12345/webhooks/internal/auth"
+	"github.com/AmeenKhan12345/Eventrail/internal/auth"
 )
 
 const (

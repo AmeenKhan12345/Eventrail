@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/AmeenKhan12345/webhooks/internal/httpx"
+	"github.com/AmeenKhan12345/Eventrail/internal/httpx"
 )
 
 // Operator requires Authorization: Bearer <key>.

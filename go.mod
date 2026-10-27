@@ -1,4 +1,4 @@
-module github.com/AmeenKhan12345/webhooks
+module github.com/AmeenKhan12345/Eventrail
 
 go 1.25.11
 
