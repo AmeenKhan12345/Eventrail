@@ -28,7 +28,7 @@ type fakeService struct {
 	secret    string
 }
 
-func (f *fakeService) Create(_ context.Context, tenantID uuid.UUID, rawURL, description string) (Endpoint, string, error) {
+func (f *fakeService) Create(_ context.Context, tenantID uuid.UUID, rawURL, description string, eventTypes []string) (Endpoint, string, error) {
 	if f.createErr != nil {
 		return Endpoint{}, "", f.createErr
 	}
@@ -38,6 +38,7 @@ func (f *fakeService) Create(_ context.Context, tenantID uuid.UUID, rawURL, desc
 		URL:         rawURL,
 		Description: description,
 		IsActive:    true,
+		EventTypes:  eventTypes,
 		CreatedAt:   time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
 		UpdatedAt:   time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
 	}, "whsec_once", nil
@@ -58,7 +59,7 @@ func (f *fakeService) List(context.Context, uuid.UUID, int, int) ([]Endpoint, er
 	return f.listed, nil
 }
 
-func (f *fakeService) Update(_ context.Context, _, _ uuid.UUID, _, _ *string, _ *bool) (Endpoint, error) {
+func (f *fakeService) Update(_ context.Context, _, _ uuid.UUID, _, _ *string, _ *bool, _ *[]string) (Endpoint, error) {
 	if f.updateErr != nil {
 		return Endpoint{}, f.updateErr
 	}

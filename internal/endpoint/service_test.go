@@ -24,14 +24,17 @@ type fakeStore struct {
 	updateURL        *string
 	updateDesc       *string
 	updateActive     *bool
+	updateTypes      *[]string
+	createTypes      []string
 	listLimit        int
 	listOffset       int
 }
 
-func (f *fakeStore) Create(_ context.Context, _ uuid.UUID, rawURL, description string, ciphertext []byte) (Endpoint, error) {
+func (f *fakeStore) Create(_ context.Context, _ uuid.UUID, rawURL, description string, ciphertext []byte, eventTypes []string) (Endpoint, error) {
 	f.createCalled = true
 	f.createURL = rawURL
 	f.createDesc = description
+	f.createTypes = eventTypes
 	f.ciphertext = ciphertext
 	if f.createErr != nil {
 		return Endpoint{}, f.createErr
@@ -49,10 +52,11 @@ func (f *fakeStore) List(_ context.Context, _ uuid.UUID, limit, offset int) ([]E
 	return []Endpoint{}, nil
 }
 
-func (f *fakeStore) Update(_ context.Context, _, _ uuid.UUID, rawURL, description *string, isActive *bool) (Endpoint, error) {
+func (f *fakeStore) Update(_ context.Context, _, _ uuid.UUID, rawURL, description *string, isActive *bool, eventTypes *[]string) (Endpoint, error) {
 	f.updateURL = rawURL
 	f.updateDesc = description
 	f.updateActive = isActive
+	f.updateTypes = eventTypes
 	return Endpoint{URL: deref(rawURL)}, nil
 }
 
@@ -90,7 +94,7 @@ func TestCreateValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fake := &fakeStore{}
-			_, secret, err := NewService(fake, testBox(t), tt.allowInsecure).Create(context.Background(), uuid.New(), tt.url, tt.description)
+			_, secret, err := NewService(fake, testBox(t), tt.allowInsecure).Create(context.Background(), uuid.New(), tt.url, tt.description, nil)
 			if tt.wantMsg != "" {
 				if !errors.Is(err, ErrInvalidInput) || err.Error() != tt.wantMsg {
 					t.Fatalf("err = %v, want %q", err, tt.wantMsg)
@@ -118,7 +122,7 @@ func TestCreateValidation(t *testing.T) {
 }
 
 func TestUpdateRequiresAField(t *testing.T) {
-	_, err := NewService(&fakeStore{}, testBox(t), false).Update(context.Background(), uuid.New(), uuid.New(), nil, nil, nil)
+	_, err := NewService(&fakeStore{}, testBox(t), false).Update(context.Background(), uuid.New(), uuid.New(), nil, nil, nil, nil)
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("err = %v, want ErrInvalidInput", err)
 	}
@@ -152,7 +156,7 @@ func TestStoreErrorsPassThrough(t *testing.T) {
 			name: "create conflict",
 			fake: fakeStore{createErr: ErrConflict},
 			call: func(s *Service) error {
-				_, _, err := s.Create(context.Background(), uuid.New(), "https://example.com/hook", "")
+				_, _, err := s.Create(context.Background(), uuid.New(), "https://example.com/hook", "", nil)
 				return err
 			},
 			want: ErrConflict,
@@ -170,7 +174,7 @@ func TestStoreErrorsPassThrough(t *testing.T) {
 			name: "create internal",
 			fake: fakeStore{createErr: boom},
 			call: func(s *Service) error {
-				_, _, err := s.Create(context.Background(), uuid.New(), "https://example.com/hook", "")
+				_, _, err := s.Create(context.Background(), uuid.New(), "https://example.com/hook", "", nil)
 				return err
 			},
 			want: boom,
@@ -194,6 +198,46 @@ func TestListPage(t *testing.T) {
 	}
 	if fake.listLimit != 20 || fake.listOffset != 0 {
 		t.Fatalf("limit %d offset %d", fake.listLimit, fake.listOffset)
+	}
+}
+
+func TestEventTypeValidation(t *testing.T) {
+	tooMany := make([]string, 51)
+	for i := range tooMany {
+		tooMany[i] = "order.created"
+	}
+	tests := []struct {
+		name    string
+		types   []string
+		wantMsg string
+	}{
+		{name: "empty"},
+		{name: "valid", types: []string{"order.created", "a", "b_c-d"}},
+		{name: "uppercase", types: []string{"Order"}, wantMsg: "event type is invalid"},
+		{name: "empty string", types: []string{""}, wantMsg: "event type is invalid"},
+		{name: "too long", types: []string{strings.Repeat("a", 101)}, wantMsg: "event type is invalid"},
+		{name: "too many", types: tooMany, wantMsg: "at most 50 event types"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeStore{}
+			_, _, err := NewService(fake, testBox(t), false).Create(context.Background(), uuid.New(), "https://example.com/hook", "", tt.types)
+			if tt.wantMsg != "" {
+				if !errors.Is(err, ErrInvalidInput) || err.Error() != tt.wantMsg {
+					t.Fatalf("err = %v, want %q", err, tt.wantMsg)
+				}
+				if fake.createCalled {
+					t.Fatal("store was called")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			if len(fake.createTypes) != len(tt.types) {
+				t.Fatalf("stored types = %v, want %v", fake.createTypes, tt.types)
+			}
+		})
 	}
 }
 

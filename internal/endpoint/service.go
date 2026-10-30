@@ -3,6 +3,7 @@ package endpoint
 import (
 	"context"
 	"net/url"
+	"regexp"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -13,16 +14,20 @@ import (
 const (
 	maxURLLen         = 2048
 	maxDescriptionLen = 500
+	maxEventTypes     = 50
 	defaultListLimit  = 20
 	maxListLimit      = 100
 )
 
+// eventTypePattern is the allowed shape of one event type name.
+var eventTypePattern = regexp.MustCompile(`^[a-z0-9_.-]{1,100}$`)
+
 // store is the data access the service needs. *Store satisfies it.
 type store interface {
-	Create(ctx context.Context, tenantID uuid.UUID, url, description string, secretCiphertext []byte) (Endpoint, error)
+	Create(ctx context.Context, tenantID uuid.UUID, url, description string, secretCiphertext []byte, eventTypes []string) (Endpoint, error)
 	Get(ctx context.Context, tenantID, id uuid.UUID) (Endpoint, error)
 	List(ctx context.Context, tenantID uuid.UUID, limit, offset int) ([]Endpoint, error)
-	Update(ctx context.Context, tenantID, id uuid.UUID, url, description *string, isActive *bool) (Endpoint, error)
+	Update(ctx context.Context, tenantID, id uuid.UUID, url, description *string, isActive *bool, eventTypes *[]string) (Endpoint, error)
 	SoftDelete(ctx context.Context, tenantID, id uuid.UUID) error
 	RotateSecret(ctx context.Context, tenantID, id uuid.UUID, secretCiphertext []byte) (Endpoint, error)
 }
@@ -41,18 +46,21 @@ func NewService(s store, box *secrets.Box, allowInsecureURLs bool) *Service {
 
 // Create checks the URL and description, generates a signing secret, and stores
 // only the ciphertext. The plaintext secret is returned once.
-func (s *Service) Create(ctx context.Context, tenantID uuid.UUID, rawURL, description string) (Endpoint, string, error) {
+func (s *Service) Create(ctx context.Context, tenantID uuid.UUID, rawURL, description string, eventTypes []string) (Endpoint, string, error) {
 	if err := validateURL(rawURL, s.allowInsecureURLs); err != nil {
 		return Endpoint{}, "", err
 	}
 	if err := validateDescription(description); err != nil {
 		return Endpoint{}, "", err
 	}
+	if err := validateEventTypes(eventTypes); err != nil {
+		return Endpoint{}, "", err
+	}
 	plaintext, ciphertext, err := s.newSecret()
 	if err != nil {
 		return Endpoint{}, "", err
 	}
-	endpoint, err := s.store.Create(ctx, tenantID, rawURL, description, ciphertext)
+	endpoint, err := s.store.Create(ctx, tenantID, rawURL, description, ciphertext, eventTypes)
 	if err != nil {
 		return Endpoint{}, "", err
 	}
@@ -81,8 +89,8 @@ func (s *Service) List(ctx context.Context, tenantID uuid.UUID, limit, offset in
 }
 
 // Update validates the provided fields and patches the tenant's endpoint.
-func (s *Service) Update(ctx context.Context, tenantID, id uuid.UUID, rawURL, description *string, isActive *bool) (Endpoint, error) {
-	if rawURL == nil && description == nil && isActive == nil {
+func (s *Service) Update(ctx context.Context, tenantID, id uuid.UUID, rawURL, description *string, isActive *bool, eventTypes *[]string) (Endpoint, error) {
+	if rawURL == nil && description == nil && isActive == nil && eventTypes == nil {
 		return Endpoint{}, InvalidInput("at least one field is required")
 	}
 	if rawURL != nil {
@@ -95,7 +103,12 @@ func (s *Service) Update(ctx context.Context, tenantID, id uuid.UUID, rawURL, de
 			return Endpoint{}, err
 		}
 	}
-	return s.store.Update(ctx, tenantID, id, rawURL, description, isActive)
+	if eventTypes != nil {
+		if err := validateEventTypes(*eventTypes); err != nil {
+			return Endpoint{}, err
+		}
+	}
+	return s.store.Update(ctx, tenantID, id, rawURL, description, isActive, eventTypes)
 }
 
 // SoftDelete hides the tenant's endpoint.
@@ -158,6 +171,18 @@ func validateURL(raw string, allowInsecure bool) error {
 func validateDescription(description string) error {
 	if utf8.RuneCountInString(description) > maxDescriptionLen {
 		return InvalidInput("description must be at most 500 characters")
+	}
+	return nil
+}
+
+func validateEventTypes(types []string) error {
+	if len(types) > maxEventTypes {
+		return InvalidInput("at most 50 event types")
+	}
+	for _, eventType := range types {
+		if !eventTypePattern.MatchString(eventType) {
+			return InvalidInput("event type is invalid")
+		}
 	}
 	return nil
 }

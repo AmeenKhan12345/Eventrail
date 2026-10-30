@@ -100,7 +100,7 @@ func TestDuplicateActiveURL(t *testing.T) {
 	truncate(t)
 	tenantID := insertTenant(t, "owner")
 	createEndpoint(t, tenantID, "https://example.com/hook", "first")
-	_, err := testStore.Create(context.Background(), tenantID, "https://example.com/hook", "second", []byte("cipher"))
+	_, err := testStore.Create(context.Background(), tenantID, "https://example.com/hook", "second", []byte("cipher"), nil)
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("err = %v, want ErrConflict", err)
 	}
@@ -123,7 +123,7 @@ func TestTenantIsolation(t *testing.T) {
 		}},
 		{name: "update", call: func() error {
 			next := "https://example.com/other"
-			_, err := testStore.Update(ctx, other, created.ID, &next, nil, nil)
+			_, err := testStore.Update(ctx, other, created.ID, &next, nil, nil, nil)
 			return err
 		}},
 		{name: "delete", call: func() error {
@@ -155,22 +155,55 @@ func TestUpdateSetsOnlyProvidedFields(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()
 	tenantID := insertTenant(t, "owner")
-	created := createEndpoint(t, tenantID, "https://example.com/hook", "keep")
+	created, err := testStore.Create(ctx, tenantID, "https://example.com/hook", "keep", []byte("cipher"), []string{"order.created"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 	past := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	if _, err := pool.Exec(ctx, `UPDATE endpoints SET updated_at = $2 WHERE id = $1`, created.ID, past); err != nil {
 		t.Fatalf("set updated_at: %v", err)
 	}
 	created.UpdatedAt = past
 	active := false
-	updated, err := testStore.Update(ctx, tenantID, created.ID, nil, nil, &active)
+	updated, err := testStore.Update(ctx, tenantID, created.ID, nil, nil, &active, nil)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if updated.URL != created.URL || updated.Description != "keep" || updated.IsActive {
+	if updated.URL != created.URL || updated.Description != "keep" || updated.IsActive || len(updated.EventTypes) != 1 || updated.EventTypes[0] != "order.created" {
 		t.Fatalf("updated = %+v", updated)
 	}
 	if !updated.UpdatedAt.After(past) {
 		t.Fatalf("updated_at = %s, want after %s", updated.UpdatedAt, past)
+	}
+}
+
+func TestUpdateReplacesEventTypes(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+	tenantID := insertTenant(t, "owner")
+	created := createEndpoint(t, tenantID, "https://example.com/hook", "")
+	types := []string{"invoice.paid"}
+	updated, err := testStore.Update(ctx, tenantID, created.ID, nil, nil, nil, &types)
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(updated.EventTypes) != 1 || updated.EventTypes[0] != "invoice.paid" {
+		t.Fatalf("event types = %v", updated.EventTypes)
+	}
+	cleared := []string{}
+	updated, err = testStore.Update(ctx, tenantID, created.ID, nil, nil, nil, &cleared)
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if len(updated.EventTypes) != 0 {
+		t.Fatalf("event types = %v, want empty", updated.EventTypes)
+	}
+	got, err := testStore.Get(ctx, tenantID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got.EventTypes) != 0 {
+		t.Fatalf("stored event types = %v", got.EventTypes)
 	}
 }
 
@@ -194,7 +227,7 @@ func TestListNewestFirst(t *testing.T) {
 
 func createEndpoint(t *testing.T, tenantID uuid.UUID, rawURL, description string) Endpoint {
 	t.Helper()
-	created, err := testStore.Create(context.Background(), tenantID, rawURL, description, []byte("cipher-"+rawURL))
+	created, err := testStore.Create(context.Background(), tenantID, rawURL, description, []byte("cipher-"+rawURL), nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

@@ -22,10 +22,10 @@ const secretWarning = "This secret will not be shown again."
 
 // service is what the handler needs. *Service satisfies it.
 type service interface {
-	Create(ctx context.Context, tenantID uuid.UUID, url, description string) (Endpoint, string, error)
+	Create(ctx context.Context, tenantID uuid.UUID, url, description string, eventTypes []string) (Endpoint, string, error)
 	Get(ctx context.Context, tenantID, id uuid.UUID) (Endpoint, error)
 	List(ctx context.Context, tenantID uuid.UUID, limit, offset int) ([]Endpoint, error)
-	Update(ctx context.Context, tenantID, id uuid.UUID, url, description *string, isActive *bool) (Endpoint, error)
+	Update(ctx context.Context, tenantID, id uuid.UUID, url, description *string, isActive *bool, eventTypes *[]string) (Endpoint, error)
 	SoftDelete(ctx context.Context, tenantID, id uuid.UUID) error
 	RotateSecret(ctx context.Context, tenantID, id uuid.UUID) (Endpoint, string, error)
 }
@@ -58,6 +58,7 @@ type endpointResponse struct {
 	URL         string    `json:"url"`
 	Description string    `json:"description"`
 	IsActive    bool      `json:"is_active"`
+	EventTypes  []string  `json:"event_types"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -67,14 +68,16 @@ type listResponse struct {
 }
 
 type createRequest struct {
-	URL         string `json:"url"`
-	Description string `json:"description"`
+	URL         string   `json:"url"`
+	Description string   `json:"description"`
+	EventTypes  []string `json:"event_types"`
 }
 
 type updateRequest struct {
-	URL         *string `json:"url"`
-	Description *string `json:"description"`
-	IsActive    *bool   `json:"is_active"`
+	URL         *string   `json:"url"`
+	Description *string   `json:"description"`
+	IsActive    *bool     `json:"is_active"`
+	EventTypes  *[]string `json:"event_types"`
 }
 
 type secretResponse struct {
@@ -93,7 +96,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid_input", "invalid json")
 		return
 	}
-	created, secret, err := h.svc.Create(r.Context(), tenantID, req.URL, req.Description)
+	created, secret, err := h.svc.Create(r.Context(), tenantID, req.URL, req.Description, req.EventTypes)
 	if err != nil {
 		h.writeServiceError(w, r, err)
 		return
@@ -163,7 +166,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid_input", "invalid json")
 		return
 	}
-	updated, err := h.svc.Update(r.Context(), tenantID, id, req.URL, req.Description, req.IsActive)
+	updated, err := h.svc.Update(r.Context(), tenantID, id, req.URL, req.Description, req.IsActive, req.EventTypes)
 	if err != nil {
 		h.writeServiceError(w, r, err)
 		return
@@ -256,9 +259,17 @@ func toResponse(endpoint Endpoint) endpointResponse {
 		URL:         endpoint.URL,
 		Description: endpoint.Description,
 		IsActive:    endpoint.IsActive,
+		EventTypes:  eventTypesOrEmpty(endpoint.EventTypes),
 		CreatedAt:   endpoint.CreatedAt,
 		UpdatedAt:   endpoint.UpdatedAt,
 	}
+}
+
+func eventTypesOrEmpty(types []string) []string {
+	if types == nil {
+		return []string{}
+	}
+	return types
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, dest any) error {

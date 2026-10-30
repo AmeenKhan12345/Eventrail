@@ -9,6 +9,7 @@ import (
 
 	"github.com/AmeenKhan12345/Eventrail/internal/auth"
 	"github.com/AmeenKhan12345/Eventrail/internal/endpoint"
+	"github.com/AmeenKhan12345/Eventrail/internal/event"
 	"github.com/AmeenKhan12345/Eventrail/internal/httpx"
 	"github.com/AmeenKhan12345/Eventrail/internal/secrets"
 	"github.com/AmeenKhan12345/Eventrail/internal/tenant"
@@ -26,6 +27,7 @@ type Deps struct {
 func NewRouter(deps Deps) http.Handler {
 	tenants := tenant.NewHandler(tenant.NewService(tenant.NewStore(deps.Pool)))
 	endpoints := endpoint.NewHandler(endpoint.NewService(endpoint.NewStore(deps.Pool), deps.Box, deps.AllowInsecureURLs))
+	events := event.NewHandler(event.NewService(event.NewStore(deps.Pool)))
 
 	router := chi.NewRouter()
 	router.Get("/healthz", healthz(deps.Pool))
@@ -36,6 +38,7 @@ func NewRouter(deps Deps) http.Handler {
 	router.Group(func(r chi.Router) {
 		r.Use(auth.Tenant(auth.NewStore(deps.Pool)))
 		r.Mount("/v1/endpoints", endpoints.Routes())
+		r.Mount("/v1/events", events.Routes())
 	})
 	return router
 }

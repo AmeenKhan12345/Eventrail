@@ -36,12 +36,14 @@ func InvalidInput(message string) error {
 }
 
 // Endpoint is one webhook destination. It never carries the signing secret.
+// An empty EventTypes list means the endpoint accepts every event type.
 type Endpoint struct {
 	ID          uuid.UUID
 	TenantID    uuid.UUID
 	URL         string
 	Description string
 	IsActive    bool
+	EventTypes  []string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

@@ -23,16 +23,16 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-const endpointColumns = `id, tenant_id, url, description, is_active, created_at, updated_at`
+const endpointColumns = `id, tenant_id, url, description, is_active, event_types, created_at, updated_at`
 
 // Create inserts a live endpoint and returns the stored row. The secret column
-// is ciphertext only.
-func (s *Store) Create(ctx context.Context, tenantID uuid.UUID, url, description string, secretCiphertext []byte) (Endpoint, error) {
+// is ciphertext only. A nil event type list is stored as an empty array.
+func (s *Store) Create(ctx context.Context, tenantID uuid.UUID, url, description string, secretCiphertext []byte, eventTypes []string) (Endpoint, error) {
 	row := s.pool.QueryRow(ctx, `
-		INSERT INTO endpoints (tenant_id, url, description, secret_ciphertext)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO endpoints (tenant_id, url, description, secret_ciphertext, event_types)
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING `+endpointColumns,
-		tenantID, url, description, secretCiphertext)
+		tenantID, url, description, secretCiphertext, typesOrEmpty(eventTypes))
 	endpoint, err := scanEndpoint(row)
 	if err != nil {
 		return Endpoint{}, wrapErr("create endpoint", err)
@@ -83,7 +83,7 @@ func (s *Store) List(ctx context.Context, tenantID uuid.UUID, limit, offset int)
 }
 
 // Update changes only the fields whose pointers are non-nil and always sets updated_at.
-func (s *Store) Update(ctx context.Context, tenantID, id uuid.UUID, url, description *string, isActive *bool) (Endpoint, error) {
+func (s *Store) Update(ctx context.Context, tenantID, id uuid.UUID, url, description *string, isActive *bool, eventTypes *[]string) (Endpoint, error) {
 	sets := []string{"updated_at = now()"}
 	args := []any{tenantID, id}
 	if url != nil {
@@ -97,6 +97,10 @@ func (s *Store) Update(ctx context.Context, tenantID, id uuid.UUID, url, descrip
 	if isActive != nil {
 		args = append(args, *isActive)
 		sets = append(sets, fmt.Sprintf("is_active = $%d", len(args)))
+	}
+	if eventTypes != nil {
+		args = append(args, typesOrEmpty(*eventTypes))
+		sets = append(sets, fmt.Sprintf("event_types = $%d", len(args)))
 	}
 
 	query := `
@@ -155,10 +159,21 @@ func scanEndpoint(row rowScanner) (Endpoint, error) {
 		&endpoint.URL,
 		&endpoint.Description,
 		&endpoint.IsActive,
+		&endpoint.EventTypes,
 		&endpoint.CreatedAt,
 		&endpoint.UpdatedAt,
 	)
+	if endpoint.EventTypes == nil {
+		endpoint.EventTypes = []string{}
+	}
 	return endpoint, err
+}
+
+func typesOrEmpty(types []string) []string {
+	if types == nil {
+		return []string{}
+	}
+	return types
 }
 
 func wrapErr(action string, err error) error {
