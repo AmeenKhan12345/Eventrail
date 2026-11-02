@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"regexp"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -19,7 +21,7 @@ var eventTypePattern = regexp.MustCompile(`^[a-z0-9_.-]{1,100}$`)
 
 // store is the data access the service needs. *Store satisfies it.
 type store interface {
-	CreateWithFanOut(ctx context.Context, tenantID uuid.UUID, eventType string, payload []byte, idempotencyKey *string, fingerprint string) (Event, int, bool, error)
+	CreateWithFanOut(ctx context.Context, tenantID, id uuid.UUID, createdAt time.Time, eventType string, payload, webhookBody []byte, idempotencyKey *string, fingerprint string) (Event, int, bool, error)
 }
 
 // Service checks an ingested event, then stores it and its deliveries.
@@ -50,7 +52,33 @@ func (s *Service) Ingest(ctx context.Context, tenantID uuid.UUID, eventType stri
 	if idempotencyKey != "" {
 		key = &idempotencyKey
 	}
-	return s.store.CreateWithFanOut(ctx, tenantID, eventType, payload, key, fingerprint(rawBody))
+	id := uuid.New()
+	createdAt := time.Now().UTC()
+	webhookBody, err := marshalEnvelope(id, eventType, createdAt, payload)
+	if err != nil {
+		return Event{}, 0, false, err
+	}
+	return s.store.CreateWithFanOut(ctx, tenantID, id, createdAt, eventType, payload, webhookBody, key, fingerprint(rawBody))
+}
+
+// marshalEnvelope builds the webhook body once. data keeps the caller's JSON
+// bytes, so the payload is not encoded a second time.
+func marshalEnvelope(id uuid.UUID, eventType string, createdAt time.Time, payload []byte) ([]byte, error) {
+	body, err := json.Marshal(struct {
+		ID        uuid.UUID       `json:"id"`
+		Type      string          `json:"type"`
+		CreatedAt time.Time       `json:"created_at"`
+		Data      json.RawMessage `json:"data"`
+	}{
+		ID:        id,
+		Type:      eventType,
+		CreatedAt: createdAt,
+		Data:      json.RawMessage(payload),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal webhook body: %w", err)
+	}
+	return body, nil
 }
 
 func isJSONObject(payload []byte) bool {

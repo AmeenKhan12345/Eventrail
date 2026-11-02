@@ -35,12 +35,14 @@ func InvalidInput(message string) error {
 	return &ValidationError{Message: message}
 }
 
-// Event is one accepted webhook event. Payload is the raw JSON object.
+// Event is one accepted webhook event. Payload is the caller's JSON object.
+// WebhookBody is the envelope posted to endpoints, built once at ingest.
 type Event struct {
 	ID             uuid.UUID
 	TenantID       uuid.UUID
 	Type           string
 	Payload        []byte
+	WebhookBody    string
 	IdempotencyKey *string
 	Fingerprint    string
 	CreatedAt      time.Time

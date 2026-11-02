@@ -2,6 +2,7 @@ package event
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -66,7 +67,7 @@ func TestFanOutMatchesSubscribedEndpoints(t *testing.T) {
 	deleted := insertEndpoint(t, owner, "https://example.com/deleted", true, nil, true)
 	foreign := insertEndpoint(t, other, "https://example.com/foreign", true, nil, false)
 
-	event, n, replay, err := testStore.CreateWithFanOut(ctx, owner, "order.created", []byte(`{"id":1}`), nil, "fingerprint-1")
+	event, n, replay, err := createWithFanOut(t, ctx, owner, "order.created", []byte(`{"id":1}`), nil, "fingerprint-1")
 	if err != nil {
 		t.Fatalf("CreateWithFanOut: %v", err)
 	}
@@ -104,7 +105,7 @@ func TestFanOutMatchesSubscribedEndpoints(t *testing.T) {
 func TestEventWithNoEndpointsIsStored(t *testing.T) {
 	truncate(t)
 	tenantID := insertTenant(t, "owner")
-	event, n, replay, err := testStore.CreateWithFanOut(context.Background(), tenantID, "order.created", []byte(`{}`), nil, "fingerprint")
+	event, n, replay, err := createWithFanOut(t, context.Background(), tenantID, "order.created", []byte(`{}`), nil, "fingerprint")
 	if err != nil {
 		t.Fatalf("CreateWithFanOut: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestIdempotencyReplayAndConflict(t *testing.T) {
 	insertEndpoint(t, tenantID, "https://example.com/all", true, nil, false)
 	key := "order-1"
 
-	first, n, replay, err := testStore.CreateWithFanOut(ctx, tenantID, "order.created", []byte(`{"n":1}`), &key, "same-body")
+	first, n, replay, err := createWithFanOut(t, ctx, tenantID, "order.created", []byte(`{"n":1}`), &key, "same-body")
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
@@ -131,23 +132,63 @@ func TestIdempotencyReplayAndConflict(t *testing.T) {
 		t.Fatalf("first deliveries %d replay %v", n, replay)
 	}
 
-	again, n, replay, err := testStore.CreateWithFanOut(ctx, tenantID, "order.created", []byte(`{"n":1}`), &key, "same-body")
+	again, n, replay, err := createWithFanOut(t, ctx, tenantID, "order.created", []byte(`{"n":1}`), &key, "same-body")
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
-	if !replay || n != 0 || again.ID != first.ID {
-		t.Fatalf("replay id %s deliveries %d replay %v, first %s", again.ID, n, replay, first.ID)
+	if !replay || n != 0 || again.ID != first.ID || again.WebhookBody != first.WebhookBody {
+		t.Fatalf("replay id %s deliveries %d replay %v body changed %v", again.ID, n, replay, again.WebhookBody != first.WebhookBody)
+	}
+	if stored := webhookBody(t, first.ID); stored != first.WebhookBody {
+		t.Fatalf("stored body = %s", stored)
 	}
 	if countEvents(t, tenantID) != 1 || countDeliveries(t, first.ID) != 1 {
 		t.Fatalf("events %d deliveries %d", countEvents(t, tenantID), countDeliveries(t, first.ID))
 	}
 
-	_, _, _, err = testStore.CreateWithFanOut(ctx, tenantID, "order.created", []byte(`{"n":2}`), &key, "other-body")
+	_, _, _, err = createWithFanOut(t, ctx, tenantID, "order.created", []byte(`{"n":2}`), &key, "other-body")
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("err = %v, want ErrConflict", err)
 	}
-	if countEvents(t, tenantID) != 1 || countDeliveries(t, first.ID) != 1 {
+	if countEvents(t, tenantID) != 1 || countDeliveries(t, first.ID) != 1 || webhookBody(t, first.ID) != first.WebhookBody {
 		t.Fatalf("conflict changed rows: events %d deliveries %d", countEvents(t, tenantID), countDeliveries(t, first.ID))
+	}
+}
+
+func TestStoredWebhookBody(t *testing.T) {
+	truncate(t)
+	tenantID := insertTenant(t, "owner")
+	payload := []byte(`{"n":1}`)
+	event, _, replay, err := NewService(testStore).Ingest(context.Background(), tenantID, "order.created", payload, "order-1", []byte(`{"type":"order.created","payload":{"n":1}}`))
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if replay {
+		t.Fatal("first ingest replayed")
+	}
+	stored := webhookBody(t, event.ID)
+	var body struct {
+		ID        uuid.UUID       `json:"id"`
+		Type      string          `json:"type"`
+		CreatedAt time.Time       `json:"created_at"`
+		Data      json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(stored), &body); err != nil {
+		t.Fatalf("unmarshal: %v body %s", err, stored)
+	}
+	if body.ID != event.ID || body.Type != "order.created" || string(body.Data) != string(payload) {
+		t.Fatalf("body = %+v", body)
+	}
+	if body.CreatedAt.Sub(event.CreatedAt).Abs() > time.Microsecond {
+		t.Fatalf("created_at body %s column %s", body.CreatedAt, event.CreatedAt)
+	}
+
+	again, _, replay, err := NewService(testStore).Ingest(context.Background(), tenantID, "order.created", []byte(`{"n":9}`), "order-1", []byte(`{"type":"order.created","payload":{"n":1}}`))
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if !replay || again.ID != event.ID || webhookBody(t, event.ID) != stored {
+		t.Fatal("replay changed the stored webhook body")
 	}
 }
 
@@ -160,11 +201,11 @@ func TestIdempotencyKeyIsPerTenant(t *testing.T) {
 	endpointB := insertEndpoint(t, b, "https://example.com/b", true, nil, false)
 	key := "shared-key"
 
-	eventA, _, _, err := testStore.CreateWithFanOut(ctx, a, "order.created", []byte(`{"n":1}`), &key, "body-a")
+	eventA, _, _, err := createWithFanOut(t, ctx, a, "order.created", []byte(`{"n":1}`), &key, "body-a")
 	if err != nil {
 		t.Fatalf("A: %v", err)
 	}
-	eventB, _, _, err := testStore.CreateWithFanOut(ctx, b, "order.created", []byte(`{"n":1}`), &key, "body-a")
+	eventB, _, _, err := createWithFanOut(t, ctx, b, "order.created", []byte(`{"n":1}`), &key, "body-a")
 	if err != nil {
 		t.Fatalf("B: %v", err)
 	}
@@ -192,7 +233,7 @@ func TestConcurrentIdempotencyCreatesOneEvent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			event, _, _, err := testStore.CreateWithFanOut(context.Background(), tenantID, "order.created", []byte(`{"n":1}`), &key, "same-body")
+			event, _, _, err := createWithFanOut(t, context.Background(), tenantID, "order.created", []byte(`{"n":1}`), &key, "same-body")
 			errs <- err
 			ids <- event.ID
 		}()
@@ -245,13 +286,34 @@ func TestFanOutFailureRollsBackTheEvent(t *testing.T) {
 		t.Fatalf("trigger: %v", err)
 	}
 
-	_, _, _, err := testStore.CreateWithFanOut(context.Background(), tenantID, "order.created", []byte(`{}`), nil, "fingerprint")
+	_, _, _, err := createWithFanOut(t, context.Background(), tenantID, "order.created", []byte(`{}`), nil, "fingerprint")
 	if err == nil || errors.Is(err, ErrConflict) {
 		t.Fatalf("err = %v, want a delivery failure", err)
 	}
 	if countEvents(t, tenantID) != 0 {
 		t.Fatalf("events = %d, want 0", countEvents(t, tenantID))
 	}
+}
+
+func createWithFanOut(t *testing.T, ctx context.Context, tenantID uuid.UUID, eventType string, payload []byte, key *string, fingerprint string) (Event, int, bool, error) {
+	t.Helper()
+	id := uuid.New()
+	createdAt := time.Now().UTC()
+	body, err := marshalEnvelope(id, eventType, createdAt, payload)
+	if err != nil {
+		t.Fatalf("marshal webhook body: %v", err)
+	}
+	return testStore.CreateWithFanOut(ctx, tenantID, id, createdAt, eventType, payload, body, key, fingerprint)
+}
+
+func webhookBody(t *testing.T, id uuid.UUID) string {
+	t.Helper()
+	var body string
+	err := pool.QueryRow(context.Background(), `SELECT webhook_body FROM events WHERE id = $1`, id).Scan(&body)
+	if err != nil {
+		t.Fatalf("webhook body: %v", err)
+	}
+	return body
 }
 
 func insertTenant(t *testing.T, name string) uuid.UUID {

@@ -4,17 +4,22 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
 
 type fakeStore struct {
 	called      bool
+	id          uuid.UUID
+	createdAt   time.Time
 	eventType   string
 	payload     []byte
+	webhookBody []byte
 	key         *string
 	fingerprint string
 	event       Event
@@ -23,18 +28,23 @@ type fakeStore struct {
 	err         error
 }
 
-func (f *fakeStore) CreateWithFanOut(_ context.Context, _ uuid.UUID, eventType string, payload []byte, key *string, fingerprint string) (Event, int, bool, error) {
+func (f *fakeStore) CreateWithFanOut(_ context.Context, _ uuid.UUID, id uuid.UUID, createdAt time.Time, eventType string, payload, webhookBody []byte, key *string, fingerprint string) (Event, int, bool, error) {
 	f.called = true
+	f.id = id
+	f.createdAt = createdAt
 	f.eventType = eventType
 	f.payload = payload
+	f.webhookBody = webhookBody
 	f.key = key
 	f.fingerprint = fingerprint
 	if f.err != nil {
 		return Event{}, 0, false, f.err
 	}
 	if f.event.ID == uuid.Nil {
-		f.event.ID = uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+		f.event.ID = id
 		f.event.Type = eventType
+		f.event.CreatedAt = createdAt
+		f.event.WebhookBody = string(webhookBody)
 	}
 	return f.event, f.created, f.replay, nil
 }
@@ -79,6 +89,30 @@ func TestIngestValidation(t *testing.T) {
 				t.Fatalf("key = %v", fake.key)
 			}
 		})
+	}
+}
+
+func TestIngestBuildsWebhookBody(t *testing.T) {
+	fake := &fakeStore{}
+	payload := []byte(`{"n":1}`)
+	_, _, _, err := NewService(fake).Ingest(context.Background(), uuid.New(), "order.created", payload, "", []byte(`{"type":"order.created","payload":{"n":1}}`))
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if fake.id == uuid.Nil || fake.createdAt.Location() != time.UTC {
+		t.Fatalf("id %s created_at %s", fake.id, fake.createdAt)
+	}
+	var body struct {
+		ID        uuid.UUID       `json:"id"`
+		Type      string          `json:"type"`
+		CreatedAt time.Time       `json:"created_at"`
+		Data      json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(fake.webhookBody, &body); err != nil {
+		t.Fatalf("unmarshal: %v body %s", err, fake.webhookBody)
+	}
+	if body.ID != fake.id || body.Type != "order.created" || string(body.Data) != string(payload) || !body.CreatedAt.Equal(fake.createdAt) {
+		t.Fatalf("body = %+v", body)
 	}
 }
 

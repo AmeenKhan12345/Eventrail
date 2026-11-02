@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -22,17 +23,19 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-const eventColumns = `id, tenant_id, event_type, payload, idempotency_key, request_fingerprint, created_at`
+const eventColumns = `id, tenant_id, event_type, payload, webhook_body, idempotency_key, request_fingerprint, created_at`
 
 // CreateWithFanOut inserts the event and one pending delivery per matching
-// endpoint in a single transaction. A matching endpoint is active, not
+// endpoint in a single transaction. id, createdAt, and webhookBody are the
+// values the service already chose. A matching endpoint is active, not
 // deleted, owned by the same tenant, and either has no event types or lists
 // this event type.
 //
 // When idempotencyKey is set and that key already exists, the existing event
-// is returned with replay true and no new deliveries. A different fingerprint
-// for the same key is ErrConflict. A nil key always inserts a new event.
-func (s *Store) CreateWithFanOut(ctx context.Context, tenantID uuid.UUID, eventType string, payload []byte, idempotencyKey *string, fingerprint string) (Event, int, bool, error) {
+// is returned with replay true and no new deliveries. Its webhook body is left
+// unchanged. A different fingerprint for the same key is ErrConflict. A nil
+// key always inserts a new event.
+func (s *Store) CreateWithFanOut(ctx context.Context, tenantID, id uuid.UUID, createdAt time.Time, eventType string, payload, webhookBody []byte, idempotencyKey *string, fingerprint string) (Event, int, bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Event{}, 0, false, wrapErr("create event", err)
@@ -41,7 +44,7 @@ func (s *Store) CreateWithFanOut(ctx context.Context, tenantID uuid.UUID, eventT
 		_ = tx.Rollback(ctx)
 	}()
 
-	event, inserted, err := insertEvent(ctx, tx, tenantID, eventType, payload, idempotencyKey, fingerprint)
+	event, inserted, err := insertEvent(ctx, tx, tenantID, id, createdAt, eventType, payload, webhookBody, idempotencyKey, fingerprint)
 	if err != nil {
 		return Event{}, 0, false, err
 	}
@@ -77,16 +80,16 @@ func (s *Store) CreateWithFanOut(ctx context.Context, tenantID uuid.UUID, eventT
 	return event, int(tag.RowsAffected()), false, nil
 }
 
-func insertEvent(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, eventType string, payload []byte, idempotencyKey *string, fingerprint string) (Event, bool, error) {
+func insertEvent(ctx context.Context, tx pgx.Tx, tenantID, id uuid.UUID, createdAt time.Time, eventType string, payload, webhookBody []byte, idempotencyKey *string, fingerprint string) (Event, bool, error) {
 	query := `
-		INSERT INTO events (tenant_id, event_type, payload, idempotency_key, request_fingerprint)
-		VALUES ($1, $2, $3::jsonb, $4, $5)
+		INSERT INTO events (id, tenant_id, event_type, payload, webhook_body, idempotency_key, request_fingerprint, created_at)
+		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
 		RETURNING ` + eventColumns
-	args := []any{tenantID, eventType, string(payload), idempotencyKey, fingerprint}
+	args := []any{id, tenantID, eventType, string(payload), string(webhookBody), idempotencyKey, fingerprint, createdAt}
 	if idempotencyKey != nil {
 		query = `
-			INSERT INTO events (tenant_id, event_type, payload, idempotency_key, request_fingerprint)
-			VALUES ($1, $2, $3::jsonb, $4, $5)
+			INSERT INTO events (id, tenant_id, event_type, payload, webhook_body, idempotency_key, request_fingerprint, created_at)
+			VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
 			ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL
 			DO NOTHING
 			RETURNING ` + eventColumns
@@ -131,6 +134,7 @@ func scanEvent(row rowScanner) (Event, error) {
 		&event.TenantID,
 		&event.Type,
 		&event.Payload,
+		&event.WebhookBody,
 		&event.IdempotencyKey,
 		&event.Fingerprint,
 		&event.CreatedAt,
