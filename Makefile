@@ -1,4 +1,4 @@
-.PHONY: migrate-up migrate-down create-test-db test
+.PHONY: migrate-up migrate-down create-test-db test run-worker
 
 # Apply every migration that has not run yet. Requires DATABASE_URL.
 migrate-up:
@@ -16,3 +16,7 @@ create-test-db:
 test:
 	@test -n "$(TEST_DATABASE_URL)" || (echo "TEST_DATABASE_URL is required" && exit 1)
 	go test -p 1 ./...
+
+# Start the delivery worker. Requires DATABASE_URL and SIGNING_SECRET_KEY.
+run-worker:
+	go run ./cmd/worker

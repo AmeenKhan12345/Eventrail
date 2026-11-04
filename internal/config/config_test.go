@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"testing"
+	"time"
 )
 
 func TestLoad(t *testing.T) {
@@ -74,6 +75,109 @@ func TestLoad(t *testing.T) {
 				t.Fatalf("Load: %v", err)
 			}
 			if !equalConfig(got, tt.want) {
+				t.Fatalf("got %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadWorker(t *testing.T) {
+	signingKey := bytes.Repeat([]byte{7}, 32)
+	signingKeyB64 := base64.StdEncoding.EncodeToString(signingKey)
+	base := map[string]string{
+		"DATABASE_URL":         "postgres://localhost/webhooks",
+		"SIGNING_SECRET_KEY":   signingKeyB64,
+		"ALLOW_INSECURE_URLS":  "",
+		"LOG_LEVEL":            "",
+		"WORKER_CONCURRENCY":   "",
+		"WORKER_POLL_INTERVAL": "",
+		"WORKER_LEASE":         "",
+		"DELIVERY_TIMEOUT":     "",
+	}
+	tests := []struct {
+		name    string
+		env     map[string]string
+		want    WorkerSettings
+		wantErr bool
+	}{
+		{
+			name:    "missing database url",
+			env:     map[string]string{"DATABASE_URL": ""},
+			wantErr: true,
+		},
+		{
+			name:    "bad concurrency",
+			env:     map[string]string{"WORKER_CONCURRENCY": "many"},
+			wantErr: true,
+		},
+		{
+			name:    "concurrency below 1",
+			env:     map[string]string{"WORKER_CONCURRENCY": "0"},
+			wantErr: true,
+		},
+		{
+			name:    "bad lease",
+			env:     map[string]string{"WORKER_LEASE": "soon"},
+			wantErr: true,
+		},
+		{
+			name: "defaults",
+			want: WorkerSettings{
+				DatabaseURL:      "postgres://localhost/webhooks",
+				LogLevel:         "info",
+				SigningSecretKey: signingKey,
+				Concurrency:      10,
+				PollInterval:     time.Second,
+				Lease:            60 * time.Second,
+				DeliveryTimeout:  10 * time.Second,
+			},
+		},
+		{
+			name: "overrides",
+			env: map[string]string{
+				"DATABASE_URL":         "postgres://db/app",
+				"LOG_LEVEL":            "debug",
+				"ALLOW_INSECURE_URLS":  "true",
+				"WORKER_CONCURRENCY":   "4",
+				"WORKER_POLL_INTERVAL": "250ms",
+				"WORKER_LEASE":         "30s",
+				"DELIVERY_TIMEOUT":     "2s",
+			},
+			want: WorkerSettings{
+				DatabaseURL:       "postgres://db/app",
+				LogLevel:          "debug",
+				SigningSecretKey:  signingKey,
+				AllowInsecureURLs: true,
+				Concurrency:       4,
+				PollInterval:      250 * time.Millisecond,
+				Lease:             30 * time.Second,
+				DeliveryTimeout:   2 * time.Second,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := make(map[string]string, len(base)+len(tt.env))
+			for key, value := range base {
+				env[key] = value
+			}
+			for key, value := range tt.env {
+				env[key] = value
+			}
+			for key, value := range env {
+				t.Setenv(key, value)
+			}
+			got, err := LoadWorker()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadWorker: %v", err)
+			}
+			if got.DatabaseURL != tt.want.DatabaseURL || got.LogLevel != tt.want.LogLevel || got.AllowInsecureURLs != tt.want.AllowInsecureURLs || got.Concurrency != tt.want.Concurrency || got.PollInterval != tt.want.PollInterval || got.Lease != tt.want.Lease || got.DeliveryTimeout != tt.want.DeliveryTimeout || !bytes.Equal(got.SigningSecretKey, tt.want.SigningSecretKey) {
 				t.Fatalf("got %+v, want %+v", got, tt.want)
 			}
 		})

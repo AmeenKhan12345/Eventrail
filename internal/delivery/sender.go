@@ -27,12 +27,15 @@ const (
 type FailureKind string
 
 const (
-	FailureNone               FailureKind = "none"
-	FailureTimeout            FailureKind = "timeout"
-	FailureNetwork            FailureKind = "network"
-	FailureBlockedDestination FailureKind = "blocked_destination"
-	FailureNon2xx             FailureKind = "non_2xx"
-	FailureInvalidURL         FailureKind = "invalid_url"
+	FailureNone                FailureKind = "none"
+	FailureTimeout             FailureKind = "timeout"
+	FailureNetwork             FailureKind = "network"
+	FailureBlockedDestination  FailureKind = "blocked_destination"
+	FailureNon2xx              FailureKind = "non_2xx"
+	FailureInvalidURL          FailureKind = "invalid_url"
+	FailureAttemptsExhausted   FailureKind = "attempts_exhausted"
+	FailureEndpointUnavailable FailureKind = "endpoint_unavailable"
+	FailureDecrypt             FailureKind = "decrypt_failed"
 )
 
 // Config is the HTTP client settings for Sender.
@@ -103,6 +106,11 @@ func NewSender(cfg Config, policy IPPolicy) *Sender {
 		allowInsecure: cfg.AllowInsecure,
 		maxExcerpt:    cfg.MaxResponseExcerpt,
 	}
+}
+
+// Timeout is how long one send may take. The worker lease has to outlast it.
+func (s *Sender) Timeout() time.Duration {
+	return s.client.Timeout
 }
 
 // Send posts req once. Any 2xx is success. The call stops when ctx is canceled.

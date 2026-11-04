@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"strconv"
+	"time"
 )
 
 const signingSecretKeyLen = 32
@@ -57,6 +59,91 @@ func Load() (Config, error) {
 		SigningSecretKey:  signingSecretKey,
 		AllowInsecureURLs: os.Getenv("ALLOW_INSECURE_URLS") == "true",
 	}, nil
+}
+
+// WorkerSettings is the environment the delivery worker reads at startup.
+// The operator API key is not required. An empty worker setting uses the default.
+type WorkerSettings struct {
+	DatabaseURL       string
+	LogLevel          string
+	SigningSecretKey  []byte
+	AllowInsecureURLs bool
+	Concurrency       int
+	PollInterval      time.Duration
+	Lease             time.Duration
+	DeliveryTimeout   time.Duration
+}
+
+// LoadWorker reads the worker process settings.
+// DATABASE_URL and SIGNING_SECRET_KEY are required.
+// WORKER_CONCURRENCY defaults to 10, WORKER_POLL_INTERVAL to 1s,
+// WORKER_LEASE to 60s, and DELIVERY_TIMEOUT to 10s.
+func LoadWorker() (WorkerSettings, error) {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		return WorkerSettings{}, fmt.Errorf("DATABASE_URL is required")
+	}
+	signingSecretKey, err := decodeSigningSecretKey(os.Getenv("SIGNING_SECRET_KEY"))
+	if err != nil {
+		return WorkerSettings{}, err
+	}
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "info"
+	}
+	concurrency, err := envInt("WORKER_CONCURRENCY", 10)
+	if err != nil {
+		return WorkerSettings{}, err
+	}
+	pollInterval, err := envDuration("WORKER_POLL_INTERVAL", time.Second)
+	if err != nil {
+		return WorkerSettings{}, err
+	}
+	lease, err := envDuration("WORKER_LEASE", 60*time.Second)
+	if err != nil {
+		return WorkerSettings{}, err
+	}
+	deliveryTimeout, err := envDuration("DELIVERY_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return WorkerSettings{}, err
+	}
+	return WorkerSettings{
+		DatabaseURL:       databaseURL,
+		LogLevel:          logLevel,
+		SigningSecretKey:  signingSecretKey,
+		AllowInsecureURLs: os.Getenv("ALLOW_INSECURE_URLS") == "true",
+		Concurrency:       concurrency,
+		PollInterval:      pollInterval,
+		Lease:             lease,
+		DeliveryTimeout:   deliveryTimeout,
+	}, nil
+}
+
+func envInt(name string, fallback int) (int, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s is invalid", name)
+	}
+	if n < 1 {
+		return 0, fmt.Errorf("%s must be at least 1", name)
+	}
+	return n, nil
+}
+
+func envDuration(name string, fallback time.Duration) (time.Duration, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("%s is invalid", name)
+	}
+	return d, nil
 }
 
 func decodeSigningSecretKey(raw string) ([]byte, error) {
